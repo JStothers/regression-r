@@ -1,0 +1,871 @@
+---
+title: "HS631 Data Analysis and Visualization Project"
+author: "Jessica Stothers"
+date: "12/08/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+setwd("/Users/Jessica/Documents/School/USF/631_Statistical_Computing/Final_Project")
+
+library(Amelia)
+library(car)
+library(corrplot)
+library(ggplot2)
+library(MASS)
+library(mice)
+library(pscl)
+library(pwr)
+library(stats)
+
+# Load and clean data
+load("births.Rdata")
+
+# Convert impossible values to NA
+births$dad_age[births$dad_age == 999] <- NA
+births$len_preg[births$len_preg == 999] <- NA
+births$is_premie[births$is_premie == 'unknown'] <- NA
+births$num_visits[births$num_visits == 999] <- NA
+births$marital[births$marital == 'unknown'] <- NA
+births$mom_wt_gain[births$mom_wt_gain == 999] <- NA
+births$smoke[births$smoke == 'unknown'] <- NA
+births$mom_white[births$mom_white == 'unknown'] <- NA
+
+# Remove empty 'unknown' levels
+births$is_premie <- factor(births$is_premie)
+births$marital <- factor(births$marital)
+births$smoke <- factor(births$smoke)
+births$mom_white <- factor(births$mom_white)
+
+# Reorder levels
+births$maturity <- factor(births$maturity, levels = c("younger", "advnced")) 
+levels(births$maturity) <- c('younger', 'advanced') # change 'advnced' to correct spelling
+# summary(births$maturity) # check that younger: 867, advanced: 133
+
+# reorder bwt so that the 1th level corresponds to the condition of interest
+births$low_bwt <- factor(births$low_bwt, levels = c("notlow", "low"))
+# summary(births$low_bwt) # check that notlow: 889, low: 111
+
+births$mom_age_level <- factor(births$mom_age_level, 
+                               levels = c("teens", "early20s", "late20s", "early30s", "35+")) 
+# summary(births$mom_age_level) # check that teens: 110, early20s: 281, late20s: 257, early30s: 219, 35+: 133
+
+```
+
+In this project, I investigate the "births" dataset with the goal of identifying the variables which have a statistically significant effect on birth weight.
+
+## Data Exploration
+
+Initial exploration showed that while most missing data was concentrated in the dad_age variable, most variables did not have a large amount of missing data (missing: 2%, observed: 98%).
+
+```{r missmap, echo=FALSE}
+# View Missing Values vs Observed 
+missmap(births, main = "Missing values vs observed")
+```
+```{r numeric births, include=FALSE}
+# Create Numeric Version of Births
+numeric_births <- births
+numeric_births$maturity <- as.numeric(numeric_births$maturity)
+numeric_births$is_premie <- as.numeric(numeric_births$is_premie)
+numeric_births$marital <- as.numeric(numeric_births$marital)
+numeric_births$low_bwt <- as.numeric(numeric_births$low_bwt)
+numeric_births$sex <- as.numeric(numeric_births$sex)
+numeric_births$smoke <- as.numeric(numeric_births$smoke)
+numeric_births$mom_white <- as.numeric(numeric_births$mom_white)
+numeric_births$mom_age_level <- as.numeric(numeric_births$mom_age_level)
+```
+
+### Summary Statistics
+
+```{r head}
+head(births)
+```
+Summary: 
+```{r summary}
+summary(births)
+```
+Standard Deviation:
+```{r sd}
+sapply(numeric_births, sd, na.rm=TRUE) # Standard Deviation
+```
+Variance:
+```{r var}
+sapply(numeric_births, var, na.rm=TRUE) # Variance
+```
+Interquartile Range:
+```{r IQR}
+sapply(numeric_births, IQR, na.rm=TRUE) # Interquartile Range
+```
+
+### Frequency Distributions
+
+```{r frequency plots, echo=FALSE}
+b <- ggplot(data=births)
+
+# dad_age
+b + geom_histogram((aes(x=dad_age, fill=low_bwt)), position="dodge", binwidth=2) + 
+  labs(title="Father Age Distribution", x="Father Age (Years)", y="Count") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="Birth Weight", # change labels of legend
+                    labels=c("low", "not low"))
+
+# mom_age
+b + geom_histogram((aes(x=mom_age, fill=low_bwt)), position="dodge", binwidth=2) + 
+  labs(title="Mother Age Distribution", x="Mother Age (Years)", y="Count") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="Birth Weight", # change labels of legend
+                      labels=c("low", "not low"))
+
+# maturity
+b + geom_bar((aes(x=maturity, fill=low_bwt)), position="dodge") + 
+  labs(title="Mother Maturity Class Distribution", x="Mother Maturity Class", y="Count") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="Birth Weight", # change labels of legend
+                      labels=c("low", "not low"))
+
+# len_preg
+b + geom_histogram((aes(x=len_preg, fill=low_bwt)), position="dodge", binwidth=2) + 
+  labs(title="Pregnancy Length Distribution", x="Length of Pregnancy (Weeks)", y="Count") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="Birth Weight", # change labels of legend
+                      labels=c("low", "not low"))
+# is_premie
+prem <- ggplot(data = subset(births, !is.na(is_premie))) # remove NAs
+prem + geom_bar((aes(x=is_premie, fill=low_bwt)), position="dodge") + 
+  labs(title="Baby Class Distribution", x="Baby Class", y="Count") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="Birth Weight", # change labels of legend
+                      labels=c("low", "not low"))
+
+# num_visits
+b + geom_histogram((aes(x=num_visits, fill=low_bwt)), position="dodge", binwidth=2) + 
+  labs(title="Hospital Visits Distribution", x="Visits to Hospital During Pregnancy", 
+       y="Count") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="Birth Weight", # change labels of legend
+                      labels=c("low", "not low"))
+
+# marital 
+mar <- ggplot(data=subset(births, !is.na(marital)))
+mar + geom_bar((aes(x=marital, fill=low_bwt)), position="dodge") + 
+  labs(title="Mother's Marital Status Distribution", 
+       x="Mother's Marital Status at Time of Birth", y="Count") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="Birth Weight", # change labels of legend
+                      labels=c("low", "not low"))
+
+# mom_wt_gain
+b + geom_histogram((aes(x=mom_wt_gain, fill=low_bwt)), position="dodge", binwidth=5) + 
+  labs(title="Mother's Weight Gain Distribution", 
+       x="Mother's Weight Gain During Pregnancy (Pounds)", y="Count") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="Birth Weight", # change labels of legend
+                      labels=c("low", "not low"))
+
+# bwt
+b + geom_histogram((aes(x=bwt, fill=low_bwt)), position="dodge", binwidth=1) + 
+  labs(title="Birth Weight Distribution", x="Baby's Birth Weight (Pounds)", y="Count") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="Birth Weight", # change labels of legend
+                      labels=c("low", "not low"))
+
+# low_bwt
+b + geom_bar((aes(x=low_bwt, fill=low_bwt))) + 
+  labs(title="Mother's Marital Status Distribution", 
+       x="Mother's Marital Status at Time of Birth", y="Count") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="Birth Weight", # change labels of legend
+                      labels=c("low", "not low")) 
+
+# sex
+b + geom_bar((aes(x=sex, fill=low_bwt)), position = "dodge") + 
+  labs(title="Sex Distribution", x="Baby's Sex", y="Count") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="Birth Weight", # change labels of legend
+                      labels=c("low", "not low")) 
+
+# smoke 
+smk <- ggplot(data = subset(births, !is.na(smoke))) # remove NAs
+smk + geom_bar((aes(x=smoke, fill=low_bwt)), position = "dodge") + 
+  labs(title="Mother's Smoking Status Distribution", x="Smoking Status of Mother", 
+       y="Count") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="Birth Weight", # change labels of legend
+                      labels=c("low", "not low")) 
+
+# mom_white 
+wht <- ggplot(data = subset(births, !is.na(mom_white))) # remove NAs
+wht + geom_bar((aes(x=mom_white, fill=low_bwt)), position = "dodge") + 
+  labs(title="Mother's Race Class Distribution", x="Mother's Race Class", 
+       y="Count") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="Birth Weight", # change labels of legend
+                      labels=c("low", "not low")) 
+
+# mom_age_level
+b + geom_bar((aes(x=mom_age_level, fill=low_bwt)), position = "dodge") + 
+  labs(title="Mother's Age Level Distribution", x="Age Level of Mother", 
+       y="Count") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="Birth Weight", # change labels of legend
+                      labels=c("low", "not low"))
+```
+
+### Correlation
+
+```{r correlation plots, echo=FALSE}
+birth_cor <- cor(numeric_births, use="pairwise.complete.obs")
+corrplot(birth_cor, type = "lower", order = "hclust", tl.col = "black", tl.srt = 45)
+```
+
+Several variables had strong relationships in this dataset, though many of these relationships
+are due to multicollinearity between variables. The variables related due to multicollinearity
+are is_premie and len_preg (premies by definition are infants with a lower length of pregnancy), low_bwt and bwt (low_bwt is a category based on birth weight), and maturity with mom_age and mom_age_level (maturity and mom_age_level are categories based on mom_age). Excluding these relationships, the strongest correlations (R>=0.7) are between dad_age and mom_age (R: 0.78) and dad_age and mom_age_level (0.75). These two correlations depict the same relationship, since mom_age_level is based on mom_age, an indicate that in our dataset infants with older mothers are likely to also have older fathers, while infants with younger mothers are likely to have younger fathers.
+
+```{r dad_age vs mom_age, echo=FALSE}
+# dad_age vs mom_age (0.78)
+b + geom_point(aes(x=mom_age, y=dad_age, color=low_bwt, shape=low_bwt)) + 
+  ggtitle("Mother vs Father Age") +
+  xlab("Mother's Age (Years)") + ylab("Father's Age (Years)") +
+  geom_smooth(aes(x=mom_age, y=dad_age, color=low_bwt), method=lm, se=FALSE) + 
+  theme(plot.title = element_text(hjust = 0.5), 
+        panel.background = element_rect(fill = "white", colour = "grey50")) 
+
+```
+
+There were several medium strength correlations (R>=0.5) within our dataset including
+len_preg and bwt (R: 0.67), len_preg and low_bwt (R: -0.59), is_premie and bwt (-0.56), and
+is_premie and low_bwt (R: 0.56) indicating that longer pregnancies correspond to higher 
+birthweight within our sample. dad_age and maturity had a coefficient of 0.50, but this  relationship is better represented by the stronger correlation between dad_age and mom_age
+(due to the greater amount of data available in the variable mom_age as compared with maturity).
+
+```{r len_preg vs bwt, echo=FALSE}
+# len_preg vs. bwt (0.67)
+b + geom_point(aes(x=len_preg, y=bwt, color=low_bwt, shape=low_bwt)) + 
+  ggtitle("Length of Pregnancy vs. Birth Weight") +
+  xlab("Length of Pregnancy (Weeks)") + ylab("Birth Weight (lb)") +
+  geom_smooth(aes(x=len_preg, y=bwt, color=low_bwt), method=lm, se=FALSE) + 
+  theme(plot.title = element_text(hjust = 0.5), 
+        panel.background = element_rect(fill = "white", colour = "grey50")) 
+```
+
+The low strength correlations (R>=0.3) observed included dad_age and marital (R: -0.35), mom_age and marital (-0.44), mom_age_level and marital (-0.44), and mom_white and marital (-0.33), indicating unmarried mothers in our sample are more likely to be young and not white, with a young father.
+
+Power tests show that with our sample size of 1000, we have a 100% chance of detecting an effect of r=0.3 or greater.
+```{r correlation power}
+pwr.r.test(r=.3, n=1000, sig.level=.05) # power = 1
+```
+
+## T-Tests
+
+```{r t-tests, include=FALSE}
+t.test(births$bwt~births$sex) # p-value = 2.769e-05, males are slightly heavier
+t.test(births$dad_age~births$marital) # p-value < 2.2e-16, more married older dads
+t.test(births$mom_age~births$marital) # p-value < 2.2e-16, more married older moms
+t.test(births$num_visits~births$marital) # p-value = 2.495e-12, more visits in married group
+t.test(births$bwt~births$marital) # p-value = 8.522e-07, marginally higher bwt in married group
+t.test(births$dad_age~births$smoke) # p-value = 0.01499, more young dads with smokers
+t.test(births$mom_age~births$smoke) # p-value = 0.0002545, more young moms smoke
+t.test(births$num_visits~births$smoke) # p-value = 0.0275, slightly more nonsmoker visits
+t.test(births$bwt~births$smoke) # p-value = 0.01945, higher bwt in nonsmokers
+t.test(births$dad_age~births$maturity) # p-value < 2.2e-16, older moms with older dads
+t.test(births$dad_age~births$mom_white) # p-value = 0.003503, older dads with white moms
+t.test(births$mom_age~births$mom_white) # p-value = 2.429e-07, older white moms
+t.test(births$mom_wt_gain~births$mom_white) # p-value = 0.02903, white moms gain more weight
+t.test(births$num_visits~births$mom_white) # p-value = 0.02375, more visits in white group
+t.test(births$len_preg~births$mom_white) # p-value = 0.007861, longer pregnancy in white group
+t.test(births$bwt~births$mom_white) # p-value = 1.93e-06, higher bwt in white group
+t.test(births$mom_wt_gain~births$is_premie) # p-value = 1.369e-05, more mom weight gain with fullterm
+t.test(births$num_visits~births$is_premie) # p-value = 0.0001084, more visits in fullterm group
+t.test(births$bwt~births$is_premie) # p-value < 2.2e-16, premies have lower bwt
+t.test(births$mom_wt_gain~births$low_bwt) # p-value = 0.001797, less mom weight gain in low bwt
+t.test(births$num_visits~births$low_bwt) # p-value = 0.002936, less visits in low bwt
+t.test(births$len_preg~births$low_bwt) # p-value < 2.2e-16, shorter preg in low bwt
+```
+
+I next performed Student's t-Test to further investigate interactions between the variables. These tests revealed that male infants have a slightly higher birth weight on average than female infants (0.40 lb difference, p: 2.77e-05).
+```{r bwt vs sex, echo=FALSE}
+b + geom_boxplot(aes(x=sex, y=bwt, fill = sex)) + ggtitle("Baby's Sex vs. Birth Weight") +
+  xlab("Baby's Sex") + ylab("Birth Weight (lb)") + theme_classic()
+```
+
+The tests also confirmed that older mothers were more likely to be married (p: < 2.2e-16), as were older fathers (p: < 2.2e-16).
+```{r marital vs mom_age and dad_age, echo=FALSE}
+mar + geom_boxplot(aes(x=marital, y=dad_age, fill = marital)) + 
+  ggtitle("Mother's Marital Status vs. Father's Age") +
+  xlab("Mother's Marital Status") + ylab("Father's Age (Years)") +
+  theme_classic()
+
+mar + geom_boxplot(aes(x=marital, y=mom_age, fill = marital)) + 
+  ggtitle("Mother's Marital Status vs. Mother's Age") +
+  xlab("Mother's Marital Status") + ylab("Mother's Age (Years)") +
+  theme_classic()
+```
+
+Married mothers visited the hospital an average of 2 times more during pregnancy than unmarried mothers did (p: 2.50e-12).
+
+```{r marital vs num_visit, echo=FALSE}
+mar + geom_boxplot(aes(x=marital, y=num_visits, fill = marital)) + 
+  ggtitle("Mother's Marital Status vs. Number of Visits") +
+  xlab("Mother's Marital Status") + ylab("Number of Visits") +
+  theme_classic()
+```
+
+The average birth weight for infants of married mothers was slightly higher (0.50 lb, p:8.52e-07), than for unmarried mothers.
+
+```{r marital vs bwt, echo=FALSE}
+mar + geom_boxplot(aes(x=marital, y=bwt, fill = marital)) + 
+  ggtitle("Mother's Marital Status vs. Birth Weight") +
+  xlab("Mother's Marital Status") + ylab("Baby's Birth Weight (lb)") +
+  theme_classic() 
+```
+
+Smoking was somewhat related to age, with smoking mothers being an average of 2 years younger than nonsmoking mothers (p: 0.00025).
+
+```{r smoke vs mom_age, echo=FALSE}
+smk + geom_boxplot(aes(x=smoke, y=mom_age, fill = smoke)) + 
+  ggtitle("Mother's Smoking Status vs. Age") +
+  xlab("Mother's Smoking Status") + ylab("Mother's Age (Years)") +
+  theme_classic()
+```
+
+Nonsmoking mothers had infants with a birthweight on average 0.32 lb heaver than infants
+born to smoking mothers (p: 0.019).
+
+```{r bwt vs smoke, echo=FALSE}
+smk + geom_boxplot(aes(x=smoke, y=bwt, fill = smoke)) + 
+  ggtitle("Mother's Smoking Status vs. Baby's Birth Weight") +
+  xlab("Mother's Smoking Status") + ylab("Baby's Birth Weight (lb)") +
+  theme_classic()
+```
+
+White mothers tended to be an average of 2 years older (2.43e-07), gain an average of 2.3lb
+more weight during pregnancy, have a 0.64 week (4.5 day) longer average pregnancy (p: 0.0079),
+and have infants born an average of 0.53lb heavier than non-white mothers (p: 1.93e-06).
+
+```{r mom_white vs mom_age and bwt, echo=FALSE}
+wht + geom_boxplot(aes(x=mom_white, y=mom_age, fill = mom_white)) + 
+  ggtitle("Mother's Race vs. Age") +
+  xlab("Mother's Race") + ylab("Mother's Age (Years)") +
+  theme_classic()
+
+wht + geom_boxplot(aes(x=mom_white, y=bwt, fill = mom_white)) + 
+  ggtitle("Mother's Race vs. Baby's Birth Weight") +
+  xlab("Mother's Race") + ylab("Baby's Birth Weight (lb)") +
+  theme_classic()
+```
+
+Premature infants had mothers who gained an average of 5.33lb less during pregnancy (p: 1.37e-05), visited the doctor 1.61 times less on average (p: 0.0001), and weighed an average of 2.33lb less than fullterm infants (p-value < 2.2e-16).
+
+```{r prem vs many, echo=FALSE}
+prem + geom_boxplot(aes(x=is_premie, y=mom_wt_gain, fill = is_premie)) + 
+  ggtitle("Premie Status vs. Mother's Weight Gain") +
+  xlab("Baby's Premie Status") + ylab("Mother's Weight Gain (lb)") +
+  theme_classic()
+prem + geom_boxplot(aes(x=is_premie, y=num_visits, fill = is_premie)) + 
+  ggtitle("Premie Status vs. Number of Visits") +
+  xlab("Baby's Premie Status") + ylab("Number of Visits") +
+  theme_classic()
+prem + geom_boxplot(aes(x=is_premie, y=bwt, fill = is_premie)) + 
+  ggtitle("Premie Status vs. Baby's Birth Weight") +
+  xlab("Baby's Premie Status") + ylab("Baby's Birth Weight (lb)") +
+  theme_classic()
+```
+
+In our sample, infants in the low birth weight group were more likely to have mothers who gained less weight during pregnancy (p: 0.0018), visited the doctor less (p: 0.0029), and had shorter pregnancies (p: < 2.2e-16).
+```{r low_bwt graphs, echo=FALSE}
+b + geom_boxplot(aes(x=low_bwt, y=mom_wt_gain, fill = low_bwt)) + 
+  ggtitle("Birth Weight Group vs. Mother's Weight Gain") +
+  xlab("Baby's Birth Weight Group") + ylab("Mother's Weight Gain (lb)") +
+  theme_classic()
+b + geom_boxplot(aes(x=low_bwt, y=num_visits, fill = low_bwt)) + 
+  ggtitle("Birth Weight Group vs. Number of Visits") +
+  xlab("Baby's Birth Weight Group") + ylab("Number of Visits") +
+  theme_classic()
+b + geom_boxplot(aes(x=low_bwt, y=len_preg, fill = low_bwt)) + 
+  ggtitle("Birth Weight Group vs. Pregnancy Length") +
+  xlab("Baby's Birth Weight Group") + ylab("Length of Pregnancy (Weeks)") +
+  theme_classic() + scale_fill_discrete(name="Birth Weight Group")
+```
+
+Power analysis on the t-tests showed that in the maturity, premature, low birth weight and smoking variables, we had about a 60% chance of detecting a small effect (d = .2) with a t-test. This low power is probably due to the skewed samples with far fewer observations in the advanced age, premature infant, low birth weight and smoking mother categories. In our more balanced samples for marital groups, sex and race we had about an 85% chance of detecting a small effect size with a t-test.
+```{r t-test power, include=FALSE}
+# maturity
+pwr.t2n.test(n1=867, n2=133, d = .2, sig.level = .05) # power = 0.573652
+# 57% chance of detecting a small effect with this sample size
+
+# is_premie
+pwr.t2n.test(n1=152, n2=846, d = .2, sig.level = .05) # power = 0.6210034
+
+# marital
+pwr.t2n.test(n1=613, n2=386, d = .2, sig.level = .05) # power = 0.8675938
+
+# low_bwt
+pwr.t2n.test(n1=111, n2=889, d = .2, sig.level = .05) # power = 0.5099606
+
+# sex
+pwr.t2n.test(n1=503, n2=497, d = .2, sig.level = .05) # power = 0.8847775
+
+# smoke
+pwr.t2n.test(n1=873, n2=126, d = .2, sig.level = .05) # power = 0.5543761
+
+# mom_white
+pwr.t2n.test(n1=284, n2=714, d = .2, sig.level = .05) # power = 0.8127646
+```
+
+## ANOVA and Tukey's HSD
+
+```{r ANOVA and Tukey, include=FALSE}
+# bwt vs mom_age_level
+age_bwt_aov <- aov(bwt ~ mom_age_level, data = births)
+summary(age_bwt_aov) # Pr(>F) = 0.165 <- not significant
+TukeyHSD(age_bwt_aov)
+# num_visits vs mom_age_level
+age_nv_aov <- aov(num_visits ~ mom_age_level, data = births)
+summary(age_nv_aov) # Pr(>F) = 2.38e-07
+TukeyHSD(age_nv_aov)
+```
+
+ANOVA tests showed that the mother's age level did not have a statistically significant effect on birth weight (Pr(>F) = 0.165). Since the confidence levels of all comparisons within this ANOVA contained 0, we cannot reject the null hypothesis of no difference in birth weight between mother age levels.
+
+```{r mom_age_level vs bwt Tukey, echo=FALSE}
+plot(TukeyHSD(age_bwt_aov, "mom_age_level"))
+# As the confidence intervals all include 0, we cannot reject the null
+```
+
+However, further ANOVA testing showed statistically significant differences between mother's age level and number of visits to the hospital during pregnancy (Pr(>F) = 2.38e-07).
+A Tukey HSD showed statistically significant differences in mean number of visits between early20s-teens, late20s-teens, early30s-teens, 35+-teens, late20s-early20s and early30s-early20s as the confidence levels for these comparisons did not contain the null hypothesis of 0.
+The largest differences between groups were between late20s-teens, early30s-teens and 35+-teens due to teen mothers visiting the hospital an average of 2.3 times less than mothers in these older age groups.
+
+```{r mom_age_level vs num_visits Tukey, echo=FALSE}
+plot(TukeyHSD(age_nv_aov, "mom_age_level"))
+
+b + geom_boxplot(aes(x=mom_age_level, y=num_visits, fill = mom_age_level)) + 
+  ggtitle("Mother's Age Level vs. Number of Visits") +
+  xlab("Mother's Age Level") + ylab("Number of Visits") + labs(fill="Mother's Age Level") + scale_fill_brewer(palette="Pastel1") + theme_classic() 
+```
+
+## Chi-Squared and Kruskal-Wallis Tests
+```{r chi-squared, include=FALSE}
+# maturity vs is_premie
+chisq.test(table(births$maturity, births$is_premie)) # p-value = 0.5333
+# maturity vs marital ***
+chisq.test(table(births$maturity, births$marital)) # p-value = 9.906e-07
+# maturity vs low_bwt
+chisq.test(table(births$maturity, births$low_bwt)) # p-value = 0.4171
+# maturity vs sex
+chisq.test(table(births$maturity, births$sex)) # p-value = 0.9109
+# maturity vs smoke
+chisq.test(table(births$maturity, births$smoke)) # p-value = 0.1474
+# maturity vs mom_white
+chisq.test(table(births$maturity, births$mom_white)) # p-value = 0.09497
+# is_premie vs marital ***
+chisq.test(table(births$is_premie, births$marital)) # p-value = 0.007791
+# is_premie vs low_bwt ***
+chisq.test(table(births$is_premie, births$low_bwt)) # p-value < 2.2e-16
+# is_premie vs sex
+chisq.test(table(births$is_premie, births$sex)) # p-value = 0.3825
+# is_premie vs smoke
+chisq.test(table(births$is_premie, births$smoke)) # p-value = 1 
+# is_premie vs mom_white *
+chisq.test(table(births$is_premie, births$mom_white)) # p-value = 0.01765
+# marital vs low_bwt ***
+chisq.test(table(births$marital, births$low_bwt)) # p-value = 0.0001871
+# marital vs smoke ***
+chisq.test(table(births$marital, births$smoke)) # p-value = 0.0009981
+# marital vs mom_white ***
+chisq.test(table(births$marital, births$mom_white)) # p-value < 2.2e-16
+# low_bwt vs sex
+chisq.test(table(births$low_bwt, births$sex)) # p-value = 0.5913
+# low_bwt vs smoke
+chisq.test(table(births$low_bwt, births$smoke))# p-value = 0.2696
+# low_bwt vs mom_white *
+chisq.test(table(births$low_bwt, births$mom_white)) # p-value = 0.01489
+# smoke vs mom_white
+chisq.test(table(births$smoke, births$mom_white)) # p-value = 0.2549
+```
+
+Performance of chi-squared tests showed significant relationships between maturity vs marital (p: 9.91e-07), is_premie vs marital (p: 0.0078), is_premie vs low_bwt (p: < 2.2e-16), is_premie vs mom_white (p: 0.018), marital vs low_bwt (p: 0.00019), marital vs smoke (p: 0.001), marital vs mom_white (p: < 2.2e-16) and low_bwt vs mom_white (p: 0.015).
+```{r chi-squared plots, echo=FALSE}
+# maturity vs marital ***
+mar + geom_bar((aes(x=maturity, fill=marital)), position="dodge") + 
+  labs(title="Mother Maturity vs Mariage Status ", x="Mother Maturity Class", y="Count") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="Mariage Status")
+
+# is_premie vs marital ***
+mar_prem <- ggplot(data = subset(births, !is.na(is_premie) & !is.na(marital)))
+mar_prem + geom_bar((aes(x=is_premie, fill=marital)), position="dodge") + 
+  labs(title="Baby's Premie Status vs Mother's Mariage Status ", x="Baby's Premie Class", y="Count") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="Mariage Status")
+
+# is_premie vs low_bwt ***
+prem + geom_bar((aes(x=is_premie, fill=low_bwt)), position="dodge") + 
+  labs(title="Baby's Premie Status vs Birth Weight ", x="Baby's Premie Class", y="Count") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="Birth Weight Class")
+
+# is_premie vs mom_white *
+wht_prem <- ggplot(data = subset(births, !is.na(is_premie) & !is.na(mom_white)))
+wht_prem + geom_bar((aes(x=is_premie, fill=mom_white)), position="dodge") + 
+  labs(title="Baby's Premie Status vs Mother's Race", x="Baby's Premie Class", y="Count") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="Mother's Race")
+
+# marital vs low_bwt ***
+mar + geom_bar((aes(x=marital, fill=low_bwt)), position="dodge") + 
+  labs(title="Mother's Marital Status vs Birth Weight", x="Mother's Marital Status", y="Count") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="Baby's Birth Weight")
+
+# marital vs smoke ***
+mar_smk <- ggplot(data = subset(births, !is.na(marital) & !is.na(smoke)))
+mar_smk + geom_bar((aes(x=marital, fill=smoke)), position="dodge") + 
+  labs(title="Mother's Marital vs Smoking Status", x="Mother's Marital Status", y="Count") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="Mother's Smoking Status")
+
+# marital vs mom_white ***
+mar_wht <- ggplot(data = subset(births, !is.na(marital) & !is.na(mom_white)))
+mar_wht + geom_bar((aes(x=marital, fill=mom_white)), position="dodge") + 
+  labs(title="Mother's Marital Status vs Race", x="Mother's Marital Status", y="Count") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="Mother's Race")
+
+# low_bwt vs mom_white *
+wht + geom_bar((aes(x=low_bwt, fill=mom_white)), position="dodge") + 
+  labs(title="Baby's Birth Weight vs Mother's Race", x="Baby's Birth Weight", y="Count") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="Mother's Race")
+
+```
+```{r Kruskal-Wallis tests, include=FALSE}
+# Since mom_age_level is ordinal, use kruskal.test instead of chisq.test
+
+# is_premie vs mom_age_level
+kruskal.test(births$is_premie, births$mom_age_level) # p-value = 0.6507
+# low_bwt vs mom_age_level
+kruskal.test(births$low_bwt, births$mom_age_level) # p-value = 0.4966
+# marital vs mom_age_level ***
+kruskal.test(births$marital, births$mom_age_level) # p-value < 2.2e-16
+# smoke vs mom_age_level *
+kruskal.test(births$smoke, births$mom_age_level) # p-value = 0.0132
+# mom_white vs mom_age_level ***
+kruskal.test(births$mom_white, births$mom_age_level) # p-value = 4.837e-09
+```
+
+Since mom_age_level is an ordinal variable, I used the Kruskal-Wallis test instead of the chi-squared test and found significant relationships between marital vs mom_age_level (p: < 2.2e-16), smoke vs mom_age_level (p: 0.013) and mom_white vs mom_age_level (p: 4.84e-09).
+
+```{r Kruskal-Wallis plots, echo=FALSE}
+# marital vs mom_age_level ***
+mar + geom_bar((aes(x=mom_age_level, fill=marital)), position="dodge") + 
+  labs(title="Mother's Age Level vs Marital Status", x="Mother's Age Level", y="Count") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="Mother's Marital Status")
+
+# smoke vs mom_age_level *
+smk + geom_bar((aes(x=mom_age_level, fill=smoke)), position="dodge") + 
+  labs(title="Mother's Age Level vs Smoking Status", x="Mother's Age Level", y="Count") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="Mother's Smoking Status")
+
+# mom_white vs mom_age_level ***
+wht + geom_bar((aes(x=mom_age_level, fill=mom_white)), position="dodge") + 
+  labs(title="Mother's Age Level vs Race", x="Mother's Age Level", y="Count") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="Mother's Race")
+```
+
+This confirmed that in our sample older mothers were more likely to be married, white and/or non-smokers, while premature infants were more likely to be born to unmarried mothers and/or non-white mothers, and to have low birth weight. Unmarried mothers were more likely to be  associated with low birth weight infants, smoking, and being non-white.
+
+```{r chi-squared power, include=FALSE}
+pwr.chisq.test(w =.1, N = 1000, df = 1, sig.level =.05)  
+# the above is for a two by two chi square
+# power = 0.8853791
+```
+
+Power analysis showed that our chi-squared tests had an 89% chance of detecting a small effect size.
+
+## Linear Regression
+```{r linear regression, include=FALSE, echo=FALSE}
+# start with all variables except low_bwt (which is derived from bwt)
+fit_bwt_all <- lm(bwt~dad_age+mom_age+maturity+len_preg+is_premie+num_visits+marital+
+                    mom_wt_gain+sex+smoke+mom_white+mom_age_level, data=births)
+summary(fit_bwt_all) # Adjusted R-squared:  0.4559
+#vif(fit_bwt_all)
+alias( fit_bwt_all )
+# Error in vif.default(fit_bwt_all) : there are aliased coefficients in the model
+# This means we have perfect multicollinearity between some variables
+
+# Likely culprit #1: mom_age vs mom_age_level
+# Try with mom_age, but without mom_age_level
+fit_bwt_1 <- lm(bwt~dad_age+mom_age+maturity+len_preg+is_premie+num_visits+marital+
+                    mom_wt_gain+sex+smoke+mom_white, data=births)
+summary(fit_bwt_1) # Adjusted R-squared:  0.457
+
+# Try with mom_age_level, but without mom_age
+fit_bwt_1.2 <- lm(bwt~dad_age+mom_age_level+maturity+len_preg+is_premie+num_visits+marital+
+                  mom_wt_gain+sex+smoke+mom_white, data=births)
+summary(fit_bwt_1.2) # Adjusted R-squared:  0.4561
+
+# decide to keep mom_age (slightly higher Adjusted R^2)
+
+# vif(fit_bwt_1.2) # Error in vif.default(fit_bwt_1.2) : there are aliased coefficients in the model
+
+# Likely culprit #2: mom_age vs maturity
+
+# Try with mom_age, but without maturity
+fit_bwt_2 <- lm(bwt~dad_age+mom_age+len_preg+is_premie+num_visits+marital+mom_wt_gain+
+                  sex+smoke+mom_white, data=births)
+summary(fit_bwt_2) # Adjusted R-squared:  0.4575
+
+# Try with maturity, but without mom_age
+fit_bwt_2.2 <- lm(bwt~dad_age+maturity+len_preg+is_premie+num_visits+marital+mom_wt_gain+
+                  sex+smoke+mom_white, data=births)
+summary(fit_bwt_2.2) # Adjusted R-squared:  0.4575
+
+# decide to keep mom_age (more information than maturity)
+
+vif(fit_bwt_2) 
+# no error message, and no VIF's larger than 3, but len_preg and is_premie seem like they 
+# should have multicolinearity, so investigate with graph
+
+prem + geom_histogram(aes(x=len_preg, fill=is_premie, color=is_premie), position="identity",
+                      alpha=0.5) + labs(title="Pregnancy Length Distribution by Premie Status",
+                                        x="Length of Pregnancy (Weeks)", y="Count")
+
+# is_premie seems dependant on len_preg, so remove is_premie (less information)
+
+fit_bwt_3 <- lm(bwt~dad_age+mom_age+len_preg+num_visits+marital+mom_wt_gain+sex+smoke+mom_white, 
+                data=births)
+summary(fit_bwt_3) # Adjusted R-squared:  0.4482
+
+# Evaluate models according to best practices and remove least significant variables 
+# one at a time
+
+# Remove mom_age
+fit_bwt_4 <- lm(bwt~dad_age+len_preg+num_visits+marital+mom_wt_gain+sex+smoke+mom_white, 
+                data=births)
+summary(fit_bwt_4) # Adjusted R-squared:  0.4488
+
+# Remove num_visits
+fit_bwt_5 <- lm(bwt~dad_age+len_preg+marital+mom_wt_gain+sex+smoke+mom_white, data=births)
+summary(fit_bwt_5) # Adjusted R-squared:  0.469
+
+# Remove dad_age
+fit_bwt_final <- lm(bwt~len_preg+marital+mom_wt_gain+sex+smoke+mom_white, data=births)
+summary(fit_bwt_final) # Adjusted R-squared:  0.4837
+```
+```{r linear summary}
+summary(fit_bwt_final)
+```
+
+My final model finds that the variables pregancy length, mother's marital status, mother's weight gain during pregnancy, sex of baby, smoking status of mother, and race of mother can explain about half of the observed variation in birth weight, within our sample (Adjusted R-squared: 0.4837). The variables that have the greatest effect on the infant's birth weight are length of pregnancy (fitted coefficient: 0.33),sex of the infant (fitted coefficient: 0.38) and smoking status of the mother (fitted coefficient: -0.39).
+
+This model has a fairly high degree of precision, with a residual standard error of 1.071 on 963 degrees of freedom. I arrived at this model by  beginning with a model which included all variables, and then removing those variables causing multicollinearity with the aid of VIF summaries. To avoid overfitting the model, I then removed the least significant variables from the model one at a time, until only statistically significant variables were left (p < 0.05). While doing this I monitored the adjusted R-squareds to ensure the model's goodness of fit did not deteriorate noticablely with the removal of each variable.
+
+Plotting our model's residuals vs fitted showed that the residuals seem to be evenly distributed above and below the regression line, indicating a good model. The lack of pattern in the residuals vs fitted plot indicates that there are no nonlinear trends in the data unnaccounted for by our model. Cook's distance does not appear on the residuals vs leverage plot, indicating that outliers are not having a significant influence on the model.
+```{r linear regression plot, echo=FALSE}
+# plot(fit_bwt_final, 1)
+plot(fit_bwt_final)
+```
+
+In our sample male infants' birth weight increased by 0.38 pounds on average compared to female infants, when all other variables are held constant. This finding is unsurprising, as in humans, males generally weight more than females at birth (Kumar et al. 2013).
+```{r sex vs bwt, echo=FALSE}
+b + geom_boxplot(aes(x=sex, y=bwt, fill = sex)) + ggtitle("Baby's Sex vs. Birth Weight") +
+  xlab("Baby's Sex") + ylab("Birth Weight (lb)") + theme_classic()
+```
+
+I also found that mothers classified as smokers have babies whose birth weight decreased by 0.39 pounds on average compared to babies of nonsmoker mothers, when all other variables are held constant. This finding is consistent with previous studies which have found maternal smoking to be associated with a decrease in birth weight (Suzuki et al. 2008, Kataoka et al. 2018).
+```{r smoke vs bwt, echo=FALSE}
+smk + geom_boxplot(aes(x=smoke, y=bwt, fill = smoke)) + 
+  ggtitle("Mother's Smoking Status vs. Baby's Birth Weight") +
+  xlab("Mother's Smoking Status") + ylab("Baby's Birth Weight (lb)") +
+  theme_classic() + scale_fill_discrete(name="Smoking Status")
+```
+
+Mother's weight gain during pregnancy was found to positively affect birth weight. For every 1 pound increase in mother's weight gain during pregnancy, birth weight increased by 0.01 pounds on average, when all other variables are held constant. Though not all mothers gain weight during pregnancy, previous studies have found that in general gestational weight gain is associated with a higher birth weight (Deputy et al. 2015)
+```{r mom_weight vs bwt, echo=FALSE}
+b + geom_point(aes(x=mom_wt_gain, y=bwt), color="lightblue", shape=5) + 
+  ggtitle("Mother's Weight Gain vs. Birth Weight") +
+  xlab("Mother's Weight Gain During Pregnancy (lb)") + ylab("Birth Weight (lb)") +
+  geom_smooth(aes(x=len_preg, y=bwt), method=lm, se=T) + 
+  theme(plot.title = element_text(hjust = 0.5), 
+        panel.background = element_rect(fill = "white", colour = "grey50"))
+```
+
+Length of pregnancy had a clear positive linear association with birth weight, with a one week increase in length of pregnancy being associated with a 0.34 pound increase in birth weight on average, when all other variables are held constant.
+```{r bwt vs len_preg, echo=FALSE}
+prem + geom_point(aes(x=len_preg, y=bwt, color=is_premie, shape=is_premie)) + 
+  ggtitle("Pregnancy Length vs. Birth Weight") +
+  xlab("Length of Pregnancy (Weeks)") + ylab("Birth Weight (lb)") +
+  geom_smooth(aes(x=len_preg, y=bwt), method=lm, se=T) + 
+  theme(plot.title = element_text(hjust = 0.5), 
+        panel.background = element_rect(fill = "white", colour = "grey50")) 
+```
+
+Overall, this model found that length of pregnancy, gestational weight gain, white mothers and male infants were positively related to birth weight, while unmarried and smoking mothers were negatively related to birth weight. The variable with the strongest potential effect on birth weight was length of pregnancy. There is a strong possiblity that the influence of mother's marriage status, race and smoking status on birth weight are related to the latent variable of socio-economic status. Low socio-economic status is associated with low birth weight (Parker et al. 1994, Bublitz et al. 2016), and has been found to correlate with being a single mother (Meyer & Sullivan, 2004), smoking (Hiscock et al. 2011), and race (Braveman at al. 2010).
+
+## Logistic Regression
+```{r logistic regression, include=FALSE}
+# start with all variables except bwt (which low_bwt is derived from)
+fit_lowbwt_all <- glm(low_bwt~dad_age+mom_age+maturity+len_preg+is_premie+num_visits+marital+
+                        mom_wt_gain+sex+smoke+mom_white+mom_age_level, family=binomial(), 
+                      data=births)
+summary(fit_lowbwt_all) # Null deviance: 493.25 Residual deviance: 262.63
+pR2(fit_lowbwt_all)
+exp(coef(fit_lowbwt_all))
+#vif(fit_lowbwt_all) # Error in vif.default(fit_lowbwt_all) : there are aliased coefficients in the model
+
+alias(fit_lowbwt_all) # points to maturity as the problem
+
+# remove maturity
+fit_lowbwt_1 <- glm(low_bwt~dad_age+mom_age+len_preg+is_premie+num_visits+marital+
+                        mom_wt_gain+sex+smoke+mom_white+mom_age_level, family=binomial(), 
+                      data=births)
+summary(fit_lowbwt_1) # Null deviance: 493.25 Residual deviance: 262.63
+vif(fit_lowbwt_1) #indicates multicolinearity between mom_age and mom_age_level
+
+# remove mom_age_level
+fit_lowbwt_2 <- glm(low_bwt~dad_age+mom_age+len_preg+is_premie+num_visits+marital+
+                      mom_wt_gain+sex+smoke+mom_white, family=binomial(), data=births)
+summary(fit_lowbwt_2) # Null deviance: 493.25 Residual deviance: 264.23
+
+# remove mom_age
+fit_lowbwt_2.2 <- glm(low_bwt~dad_age+mom_age_level+len_preg+is_premie+num_visits+marital+
+                      mom_wt_gain+sex+smoke+mom_white, family=binomial(), data=births)
+summary(fit_lowbwt_2.2) # Null deviance: 493.25 Residual deviance: 263.43
+# keep this model since it has a lower residual deviance than when we remove mom_age_level
+
+
+vif(fit_lowbwt_2.2) # no VIF over 4, but remove is_premie since it's dependant on len_preg
+
+fit_lowbwt_3 <- glm(low_bwt~dad_age+mom_age_level+len_preg+num_visits+marital+
+                        mom_wt_gain+sex+smoke+mom_white, family=binomial(), data=births)
+summary(fit_lowbwt_3) # Null deviance: 493.25 Residual deviance: 263.78
+
+# remove mom_age_level (high p values in model)
+fit_lowbwt_4 <- glm(low_bwt~dad_age+len_preg+num_visits+marital+
+                      mom_wt_gain+sex+smoke+mom_white, family=binomial(), data=births)
+summary(fit_lowbwt_4) # Null deviance: 493.25 Residual deviance: 264.89
+
+# remove num_visits
+fit_lowbwt_5 <- glm(low_bwt~dad_age+len_preg+marital+mom_wt_gain+sex+smoke+mom_white, 
+                    family=binomial(), data=births)
+summary(fit_lowbwt_5) # Null deviance: 503.72 Residual deviance: 265.41
+
+# remove sex
+fit_lowbwt_6 <- glm(low_bwt~dad_age+len_preg+marital+mom_wt_gain+smoke+mom_white, 
+                    family=binomial(), data=births)
+summary(fit_lowbwt_6) # Null deviance: 503.72 Residual deviance: 265.83
+
+# remove dad_age
+fit_lowbwt_7 <- glm(low_bwt~len_preg+marital+mom_wt_gain+smoke+mom_white, 
+                    family=binomial(), data=births)
+summary(fit_lowbwt_7) # Null deviance: 660.87 Residual deviance: 381.19
+
+# remove mom_white
+fit_lowbwt_8 <- glm(low_bwt~len_preg+marital+mom_wt_gain+smoke, family=binomial(), data=births)
+summary(fit_lowbwt_8) # Null deviance: 661.33 Residual deviance: 381.28
+
+# remove mom_wt_gain
+fit_lowbwt_9 <- glm(low_bwt ~ len_preg + marital + smoke, family=binomial(), data=births)
+summary(fit_lowbwt_9) # Null deviance: 692.5 Residual deviance: 394.05
+
+# remove smoke
+fit_lowbwt_final <- glm(low_bwt ~ len_preg + marital, family=binomial(), data=births)
+summary(fit_lowbwt_final) # Null deviance: 692.56 Residual deviance: 396.08
+
+pR2(fit_lowbwt_final)
+exp(coef(fit_lowbwt_final))
+```
+```{r logistic regression final model}
+summary(fit_lowbwt_final)
+pR2(fit_lowbwt_final)
+```
+
+My final logistic regression model finds that the variables pregancy length and mother's marital status are statistically significant predictors (p < 0.05) for the variation of birth weight in our sample. The residual deviance (396.08  on 995  degrees of freedom) is much lower than the null deviance (692.56  on 997  degrees of freedom), meaning our model explains much of the deviance in birth weight. McFadden's pseudo r-squared is 0.43, implying that our model explains just under half of the variation in birth size. 
+
+I arrived at this model by beginning with a model which included all variables, and then removing those variables causing multicollinearity with the aid of VIF summaries. I then removed the least significant variables from them model one at a time, until only statistically significant variables were left (p < 0.05). While doing this I monitored the difference between null and residual deviance, ensuring it did not decrease noticablely with the removal of each variable.
+```{r odds ratio}
+exp(coef(fit_lowbwt_final))
+```
+
+The high intercept odds ratio (1.85e+10) means that all other variables held constant, within our sample a baby is much more likely to be in the notlow birth weight group than the low birth weight group. This is because we have roughly 8 times as many not low infants in our sample as low weight infants.
+```{r logistic plot, echo=TRUE}
+# plot(fit_lowbwt_final, 1)
+plot(fit_lowbwt_final)
+```
+
+Plotting the residuals of the model reveals that the residuals are somewhat evenly distributed around the regression line. Plotting residuals vs leverage shows that no points cross Cook's distance, indicating that no outliers are exerting an undue effect on the model.
+
+When the mother is unmarried, the log odds of the infant having low birth weight increase by 0.67 units on average as compared with married mothers, holding all other variables constant. For unmarried mothers as opposed to married mothers, the odds of having a low birth weight baby are multiplied by exp(coef)=exp(1.952728e+00)=1.95 (ie: an increase of 95%) on average, when all other variables in the model are held constant.
+```{r marital vs low_bwt, echo=FALSE}
+mar + geom_bar((aes(x=marital, fill=low_bwt)), position="dodge") + 
+  labs(title="Mother's Marital Status vs Birth Weight", x="Mother's Marital Status", y="Count") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_discrete(name="Baby's Birth Weight")
+```
+
+For every one week increase in length of pregnancy, the log odds of the infant having low birth weight decrease by 0.70 units on average, when all other variables in the model are held constant. For every one week increase in length of pregnancy, the odds of having a low birth weight infant are multiplied by exp(coef)=4.951682e-01=0.5 (ie: a decrease of 50%) on average, when all other variables in the model are held constant. The odds ratio of len_preg is 0.50, meaning mothers are 50% less likely to have a low birth weight infant for each week incrase in length of pregnancy.
+
+```{r low_bwt vs len_preg, echo=TRUE}
+b + geom_boxplot(aes(x=low_bwt, y=len_preg, fill = low_bwt)) + 
+  ggtitle("Birth Weight Group vs. Pregnancy Length") +
+  xlab("Baby's Birth Weight Group") + ylab("Length of Pregnancy (Weeks)") +
+  theme_classic() + scale_fill_discrete(name="Birth Weight Group")
+```
+
+While this model found that both length of pregnancy and marriage status of mother were significant predictors for low birth weight in our dataset, length of pregnancy had a much greater overall effect on birth weight than marriage status. 
+
+## Sensitivity Check with Imputed Data
+
+```{r impute, include=FALSE}
+# create a dataset with imputed data
+mice_imputes <- mice(births, m=1, maxit = 40)
+# mice_imputes$method # check that continuous variables were imputed with pmm and factor with logreg
+imputed_births<-complete(mice_imputes)
+```
+As a sensitivity check, to ensure that the missing observations did not have a large effect on the model results, I created an imputed verision of the dataset. I did this by replacing missing numeric variables with Predictive Mean Matching and missing two-level categorical variables with logistic regression predictions, and then re-ran the linear and logistic regression on the imputed dataset. When re-running the regressions, I repeated my original process by starting with all non-related independant variables and removing variables without significant fitted coefficients until I arrived at a model with only significant independant variables.
+```{r imputed linear regression}
+# start with all non related independant variables, and remove variables without significant fitted coefficients
+# summary(lm(bwt~dad_age+len_preg+num_visits+marital+mom_wt_gain+sex+smoke+mom_white, data=imputed_births))
+# summary(lm(bwt~dad_age+len_preg+marital+mom_wt_gain+sex+smoke+mom_white, data=imputed_births))
+summary(lm(bwt~len_preg+marital+mom_wt_gain+sex+smoke+mom_white, data=imputed_births))
+```
+The final imputed linear regression model included the same variables as the un-imputed model, and had an adjusted R-squared almost identical to that of the un-imputed model (imputed 0.4931 vs unimputed 0.4837). 
+```{r imputed logistic regression}
+# summary(glm(low_bwt~dad_age+mom_age_level+len_preg+num_visits+marital+mom_wt_gain+sex+smoke+mom_white, family=binomial(), data=imputed_births))
+# summary(glm(low_bwt~dad_age+mom_age_level+len_preg+num_visits+marital+mom_wt_gain+sex+smoke, family=binomial(), data=imputed_births))
+# summary(glm(low_bwt~dad_age+len_preg+num_visits+marital+mom_wt_gain+sex+smoke, family=binomial(), data=imputed_births))
+#summary(glm(low_bwt~dad_age+len_preg+num_visits+marital+sex+smoke, family=binomial(), data=imputed_births))
+#summary(glm(low_bwt~dad_age+len_preg+num_visits+marital+smoke, family=binomial(), data=imputed_births))
+#summary(glm(low_bwt~dad_age+len_preg+marital+smoke, family=binomial(), data=imputed_births))
+#summary(glm(low_bwt~len_preg+marital+smoke, family=binomial(), data=imputed_births))
+summary(glm(low_bwt~len_preg+marital, family=binomial(), data=imputed_births))
+pR2(glm(low_bwt~len_preg+marital, family=binomial(), data=imputed_births))
+```
+The final imputed logistic regression model also included the same variables as the un-imputed model, and had a McFadden's pseudo R-squared almost identical to that of the un-imputed model (imputed 0.4312289 vs unimputed 0.4319015).
+
+Based on the similarities between the imputed and unimputed models, I concluded that the missing data did not have a significant influence on the models, increasing my level of confidence in the original models. 
+
+## References
+
+Braveman, P. A., Cubbin, C., Egerter, S., Williams, D. R., & Pamuk, E. (2010). Socioeconomic disparities in health in the United States: what the patterns tell us. American journal of public health, 100 Suppl 1(Suppl 1), S186–S196. doi:10.2105/AJPH.2009.166082
+
+Bublitz, M. H., Vergara-Lopez, C., O'Reilly Treter, M., & Stroud, L. R. (2016). Association of Lower Socioeconomic Position in Pregnancy with Lower Diurnal Cortisol Production and Lower Birthweight in Male Infants. Clinical therapeutics, 38(2), 265–274. doi:10.1016/j.clinthera.2015.12.007
+
+Deputy, N. P., Sharma, A. J., & Kim, S. Y. (2015). Gestational Weight Gain - United States, 2012 and 2013. MMWR. Morbidity and mortality weekly report, 64(43), 1215–1220. doi:10.15585/mmwr.mm6443a3
+
+Hiscock, R., Bauld, L., Amos, A., Fidler, J. A., & Munafò, M. (2011). Socioeconomic status and smoking: a review. Annals of the New York Academy of Sciences, 1248(1), 107–123. doi: 10.1111/j.1749-6632.2011.06202.x
+
+Kataoka, M. C., Carvalheira, A. P. P., Ferrari, A. P., Malta, M. B., Carvalhaes, M. A. D. L., & Parada, C. M. G. D. (2018). Smoking during pregnancy and harm reduction in birth weight: a cross-sectional study. BMC Pregnancy and Childbirth, 18(1). doi: 10.1186/s12884-018-1694-4
+
+Kumar, V. S., Jeyaseelan, L., Sebastian, T., Regi, A., Mathew, J., & Jose, R. (2013). New birth weight reference standards customised to birth order and sex of babies from South India. BMC Pregnancy and Childbirth, 13(1), 1–8. doi: 10.1186/1471-2393-13-38
+
+Meyer, B. D., & Sullivan, J. X. (2004). The effects of welfare and tax reform: the material well-being of single mothers in the 1980s and 1990s. Journal of Public Economics, 88(7-8), 1387–1420. doi: 10.1016/s0047-2727(02)00219-0
+
+Parker, J. D., Schoendorf, K. C., & Kiely, J. L. (1994). Associations between measures of socioeconomic status and low birth weight, small for gestational age, and premature delivery in the United States. Annals of Epidemiology, 4(4), 271–278. doi: 10.1016/1047-2797(94)90082-5
+
+Suzuki, K., Tanaka, T., Kondo, N., Minai, J., Sato, M., & Yamagata, Z. (2008). Is maternal smoking during early pregnancy a risk factor for all low birth weight infants?. Journal of epidemiology, 18(3), 89–96. doi:10.2188/jea.je2007415
